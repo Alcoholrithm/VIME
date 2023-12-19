@@ -6,6 +6,14 @@ The pytorch implementation of [VIME: Extending the Success of Self- and Semi-sup
 
 <img width="1172" alt="image" src="https://github.com/Alcoholrithm/VIME---pytorch-implementation/assets/29500858/8fd1a43b-9ef3-4978-aa5a-65f912b7e88e">
 
+# Install
+
+```
+pip install -r requirements.txt
+```
+
 # Usage
 
+```
 See the example_*.ipynb
+```
