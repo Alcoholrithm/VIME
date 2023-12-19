@@ -1,19 +1,18 @@
-from types import SimpleNamespace
-from typing import Dict, Any
+from typing import Dict, Any, Type
 
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import StepLR
-from torch.nn import functional as F
 
 import pytorch_lightning as pl
 
 import copy
 
 from model import VIME
+from misc.scorer import BaseScorer
 
 class PLVIME(pl.LightningModule):
-    
+    """The pytorch lightning module of VIME
+    """
     def __init__(self,
                  model_hparams: Dict[str, Any],
                  optim: torch.optim,
@@ -23,10 +22,25 @@ class PLVIME(pl.LightningModule):
                  num_categoricals: int,
                  num_continuous: int,
                  u_label,
-                 loss_fn,
-                 scorer,
+                 loss_fn: nn.Module,
+                 scorer: Type[BaseScorer],
                  random_seed: int = 0,
     ) -> None:
+        """Initialize the pytorch lightining module of VIME
+
+        Args:
+            model_hparams (Dict[str, Any]): The hyperparameters of VIME
+            optim (torch.optim): The optimizer for training
+            optim_hparams (Dict[str, Any]): The hyperparameters of the optimizer
+            scheduler (torch.optim.lr_scheduler): The scheduler for training
+            scheduler_hparams (Dict[str, Any]): The hyperparameters of the scheduler
+            num_categoricals (int): The number of categorical features
+            num_continuous (int): The number of continuous features
+            u_label (Any): The specifier for unlabeled data.
+            loss_fn (nn.Module): The loss function of pytorch
+            scorer (BaseScorer): The scorer to measure the performance
+            random_seed (int, optional): The random seed. Defaults to 0.
+        """
         super().__init__()
 
         pl.seed_everything(random_seed)
@@ -76,6 +90,8 @@ class PLVIME(pl.LightningModule):
         
 
     def configure_optimizers(self):
+        """Configure the optimizer
+        """
         self.optimizer = self.optim(self.parameters(), **self.optim_hparams)
         if len(self.scheduler_hparams) == 0:
             return [self.optimizer]
@@ -83,26 +99,46 @@ class PLVIME(pl.LightningModule):
         return [self.optimizer], [{'scheduler': self.scheduler, 'interval': 'step'} ]
 
     def do_pretraining(self) -> None:
+        """Set the module to pretraining
+        """
         self.model.do_pretraining()
         self.training_step = self.pretraining_step
         self.on_validation_start = self.on_pretraining_validation_start
         self.validation_step = self.pretraining_step
         self.on_validation_epoch_end = self.pretraining_validation_epoch_end
 
-    def do_finetuning(self) -> None:
-        self.model.do_finetuning()
+    def do_finetunning(self) -> None:
+        """Set the module to finetunning
+        """
+        self.model.do_finetunning()
         self.training_step = self.finetuning_step
         self.on_validation_start = self.on_finetunning_validation_start
         self.validation_step = self.finetuning_step
         self.on_validation_epoch_end = self.finetuning_validation_epoch_end
 
     def forward(self,
-                x
-    ) -> torch.Tensor:
-        return self.model(x)
+                batch:Dict[str, Any]
+    ) -> torch.FloatTensor:
+        """Do forward pass for given input
+
+        Args:
+            batch (Dict[str, Any]): The input batch
+
+        Returns:
+            torch.FloatTensor: The output of forward pass
+        """
+        return self.model(batch)
     
 
-    def get_pretraining_loss(self, batch):
+    def get_pretraining_loss(self, batch:Dict[str, Any]):
+        """Calculate the pretraining loss
+
+        Args:
+            batch (Dict[str, Any]): The input batch
+
+        Returns:
+            torch.FloatTensor: The final loss of pretraining step
+        """
         mask_output, feature_output = self.model.pretraining_step(batch["input"])
         
         mask_loss = self.pretraining_mask_loss(mask_output, batch["label"][0])
@@ -119,6 +155,15 @@ class PLVIME(pl.LightningModule):
                       batch,
                       batch_idx: int
     ) -> Dict[str, Any]:
+        """Pretraining step of VIME
+
+        Args:
+            batch (Dict[str, Any]): The input batch
+            batch_idx (int): For compatibility, do not use
+
+        Returns:
+            Dict[str, Any]: The loss of the pretraining step
+        """
 
         loss = self.get_pretraining_loss(batch)
         self.pretraining_step_outputs.append({
@@ -129,6 +174,8 @@ class PLVIME(pl.LightningModule):
         }
 
     def on_pretraining_validation_start(self):
+        """Log the training loss of the pretraining
+        """
         if len(self.pretraining_step_outputs) > 0:
             train_loss = torch.Tensor([out["loss"] for out in self.pretraining_step_outputs]).cpu().mean()
             
@@ -138,6 +185,8 @@ class PLVIME(pl.LightningModule):
         return super().on_validation_start() 
     
     def pretraining_validation_epoch_end(self) -> None:
+        """Log the validation loss of the pretraining
+        """
         val_loss = torch.Tensor([out["loss"] for out in self.pretraining_step_outputs]).cpu().mean()
 
         self.log("val_loss", val_loss, prog_bar = True)
@@ -145,14 +194,23 @@ class PLVIME(pl.LightningModule):
         return super().on_validation_epoch_end()
 
 
-    def get_finetunning_loss(self, batch):
+    def get_finetunning_loss(self, batch:Dict[str, Any]):
+        """Calculate the finetunning loss
+
+        Args:
+            batch (Dict[str, Any]): The input batch
+
+        Returns:
+            torch.FloatTensor: The final loss of finetunning step
+            torch.Tensor: The label of the labeled data
+            torch.Tensor: The predicted label of the labeled data
+        """
         x = batch["input"]
         y = batch["label"]
         
         unsupervised_loss = 0
         unlabeled = x[y == self.u_label]
-        # print(y, y==self.u_label)
-        
+
         if len(unlabeled) > 0:
             u_y_hat = self.model.finetunning_step(unlabeled)
             target = u_y_hat[::self.consistency_len]
@@ -162,7 +220,7 @@ class PLVIME(pl.LightningModule):
         
         labeled_x = x[y != self.u_label].squeeze()
         labeled_y = y[y != self.u_label].squeeze()
-        
+
         y_hat = self.model.finetunning_step(labeled_x).squeeze()
 
         supervised_loss = self.loss_fn(y_hat, labeled_y)
@@ -176,6 +234,15 @@ class PLVIME(pl.LightningModule):
                       batch,
                       batch_idx: int
     ) -> Dict[str, Any]:
+        """Finetunning step of VIME
+
+        Args:
+            batch (Dict[str, Any]): The input batch
+            batch_idx (int): For compatibility, do not use
+
+        Returns:
+            Dict[str, Any]: The loss of the finetunning step
+        """
         loss, y, y_hat = self.get_finetunning_loss(batch)
         self.finetunning_step_outputs.append(
             {
@@ -189,6 +256,8 @@ class PLVIME(pl.LightningModule):
         }
     
     def on_finetunning_validation_start(self):
+        """Log the training loss and the performance of the finetunning
+        """
         if len(self.finetunning_step_outputs) > 0:
             train_loss = torch.Tensor([out["loss"] for out in self.finetunning_step_outputs]).cpu().mean()
             y = torch.cat([out["y"] for out in self.finetunning_step_outputs]).cpu().detach().numpy()
@@ -203,11 +272,12 @@ class PLVIME(pl.LightningModule):
         return super().on_validation_start()
     
     def finetuning_validation_epoch_end(self) -> None:
+        """Log the validation loss and the performance of the finetunning
+        """
         val_loss = torch.Tensor([out["loss"] for out in self.finetunning_step_outputs]).cpu().mean()
 
         y = torch.cat([out["y"] for out in self.finetunning_step_outputs]).cpu().numpy()
         y_hat = torch.cat([out["y_hat"] for out in self.finetunning_step_outputs]).cpu().numpy()
-        # print(y, y_hat)
         val_score = self.scorer(y, y_hat)
 
         self.log("val_" + self.scorer.__name__, val_score, prog_bar = True)
@@ -217,9 +287,16 @@ class PLVIME(pl.LightningModule):
     
     
     def predict_step(self, batch, batch_idx: int
-    ) -> torch.Tensor:
+    ) -> torch.FloatTensor:
+        """The perdict step of VIME
+
+        Args:
+            batch (Dict[str, Any]): The input batch
+            batch_idx (int): For compatibility, do not use
+
+        Returns:
+            torch.FloatTensor: The predicted output (logit)
+        """
         y_hat = self.model.finetunning_step(batch["input"])
-        
-        # y_hat = F.softmax(y_hat, dim = 1)
 
         return y_hat

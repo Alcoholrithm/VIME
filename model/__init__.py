@@ -1,3 +1,3 @@
 from .vime import *
 
-__all__ = ["VIME", ]
+__all__ = ["VIME"]
