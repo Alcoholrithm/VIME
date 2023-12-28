@@ -17,3 +17,9 @@ pip install -r requirements.txt
 ```
 See the example_*.ipynb
 ```
+
+# Difference between [the official tensorflow implementation](https://github.com/jsyoon0823/VIME)
+
+The official implementation generates static mask vectors, feature vectors, and corrupted samples during initialization of the dataset. 
+
+However, we generate them dynamically whenever call __getitem__ of the dataset to avoid bias.
