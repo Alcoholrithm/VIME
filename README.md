@@ -22,4 +22,4 @@ See the example_*.ipynb
 
 The official implementation generates static mask vectors, feature vectors, and corrupted samples during initialization of the dataset. 
 
-However, we generate them dynamically whenever call __getitem__ of the dataset to avoid bias.
+However, we generate them dynamically whenever call '\_\_getitem\_\_' of the dataset to avoid bias.
